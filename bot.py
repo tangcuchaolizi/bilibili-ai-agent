@@ -10,6 +10,7 @@ from scheduler_engine import (
     job_check_and_interact,
     job_check_private_messages,
     print_stats,
+    print_private_overview,
 )
 
 
@@ -21,7 +22,6 @@ def print_banner():
   - 定时发布 AI 生成的日常动态
   - 自动回复评论区的新评论
   - 自动回复私信消息
-  - 自动点赞评论
   - 每日数据统计
   - 模型: DeepSeek (deepseek-v4-flash)
   - 调度: APScheduler
@@ -41,10 +41,11 @@ async def main():
     print("  4. 立即检查并回复私信（测试）")
     print("  5. 查看今日统计数据")
     print("  6. 只启动后台定时任务")
+    print("  7. 查看私信总览")
     print()
 
     try:
-        choice = input("请选择 (1-6, 默认3): ").strip() or "3"
+        choice = input("请选择 (1-7, 默认3): ").strip() or "3"
     except (EOFError, KeyboardInterrupt):
         choice = "3"
 
@@ -77,6 +78,11 @@ async def main():
     elif choice == "5":
         print_stats()
         print("[完成] 统计数据已展示，程序退出。")
+        return
+
+    elif choice == "7":
+        print_private_overview()
+        print("[完成] 私信总览已展示，程序退出。")
         return
 
     elif choice == "6":

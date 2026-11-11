@@ -11,3 +11,5 @@ services:
       # 将配置和记忆文件挂载出来，防止容器重建时丢失数据
       - ./config.json:/app/config.json
       - ./memory.json:/app/memory.json
+      # 私信聊天数据库（SQLite）
+      - ./chat_history.db:/app/chat_history.db

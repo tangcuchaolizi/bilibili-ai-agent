@@ -1,5 +1,9 @@
 config.json
 memory.json
+chat_history.db
+chat_history.db-wal
+chat_history.db-shm
+api.log
 __pycache__/
 *.pyc
 .DS_Store

@@ -2,30 +2,28 @@
 调度引擎模块
 使用 APScheduler 定时触发发动态、检查评论回复和私信回复
 """
-import random
-import asyncio
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from datetime import datetime
 from config_loader import (
     load_config,
     load_memory,
-    save_memory,
     add_dynamic_record,
     is_comment_replied,
     add_reply_record,
     get_recent_dynamics,
-    get_private_chat,
-    update_private_chat_username,
-    add_chat_message,
-    is_private_msg_replied,
-    add_private_reply_record,
-    get_chat_context,
-    update_chat_last_seqno,
-    sync_chat_messages_from_api,
-    is_comment_liked,
-    add_like_record,
     get_daily_stats,
+)
+from chat_store import (
+    get_session,
+    sync_messages,
+    get_unprocessed,
+    get_chat_context,
+    add_local_reply,
+    mark_processed,
+    migrate_memory_if_needed,
+    count_replies_on_date,
+    get_overview,
 )
 from ai_generator import AIContentGenerator
 from bilibili_client import (
@@ -33,7 +31,6 @@ from bilibili_client import (
     fetch_dynamic_comment_info,
     get_comments_by_rid,
     reply_to_comment,
-    like_comment,
     get_private_sessions,
     get_chat_history,
     send_private_msg,
@@ -48,24 +45,14 @@ def create_scheduler() -> AsyncIOScheduler:
     # ---- 定时发动态 ----
     for time_str in schedule["post_times"]:
         hour, minute = time_str.split(":")
-        minute_offset = random.randint(-5, 10)
-        actual_minute = int(minute) + minute_offset
-        if actual_minute < 0:
-            actual_minute += 60
-            hour = str(int(hour) - 1).zfill(2)
-        elif actual_minute >= 60:
-            actual_minute -= 60
-            hour = str(int(hour) + 1).zfill(2)
-        hour_int = int(hour) % 24
-
         scheduler.add_job(
             job_post_dynamic,
-            CronTrigger(hour=hour_int, minute=actual_minute),
+            CronTrigger(hour=int(hour), minute=int(minute)),
             id=f"post_dynamic_{hour}_{minute}",
             name=f"发动态 {time_str}",
             misfire_grace_time=300,
         )
-        print(f"[调度] 发动态任务: 约 {hour}:{actual_minute:02d} (基准 {time_str}, 偏移{minute_offset:+d}分)")
+        print(f"[调度] 发动态任务: {time_str}")
 
     # ---- 定时检查评论 ----
     check_interval = schedule["comment_check_interval_minutes"]
@@ -124,13 +111,11 @@ async def job_post_dynamic():
         print(f"  [错误] 动态发布失败: {e}")
 
 async def job_check_and_interact():
-    """检查评论并回复、点赞"""
+    """检查评论并回复"""
     print(f"[{datetime.now().strftime('%H:%M:%S')}] 开始检查评论...")
     try:
         config = load_config()
         memory = load_memory()
-        reply_prob = config["schedule"]["reply_probability"]
-        like_prob = config["schedule"]["like_probability"]
         my_uid = str(config["bilibili"].get("dedeuserid", ""))
 
         # 获取最近动态（最多5条）
@@ -144,10 +129,8 @@ async def job_check_and_interact():
 
         generator = AIContentGenerator()
         total_new = 0
-        total_liked = 0
 
         for dyn in recent_dynamics:
-            dyn_id_str = dyn["dynamic_id"]
             dyn_rid = dyn["dyn_rid"]
             comment_type = dyn.get("comment_type", 17)
 
@@ -171,72 +154,89 @@ async def job_check_and_interact():
                 if mid == my_uid:
                     continue
 
-                is_new = False
-                is_replied = is_comment_replied(memory, rpid)
-                is_liked_flag = is_comment_liked(memory, rpid)
-
-                if not is_replied or not is_liked_flag:
-                    total_new += 1
-                    is_new = True
-                    print(f"    [新][{user}](rpid:{rpid}): {text[:50]}")
-                else:
+                if is_comment_replied(memory, rpid):
                     print(f"    [{user}](rpid:{rpid}): {text[:30]}... (已处理，跳过)")
                     continue
 
-                # 模拟真人延迟
-                delay = random.randint(3, 15)
-                print(f"    等待 {delay} 秒...")
-                await asyncio.sleep(delay)
+                total_new += 1
+                print(f"    [新][{user}](rpid:{rpid}): {text[:50]}")
 
-                # 概率点赞
-                if not is_liked_flag and random.random() < like_prob:
-                    try:
-                        result = await like_comment(int(rpid), dyn_oid, comment_type, like=True)
-                        if isinstance(result, dict) and result.get("code", 0) != 0:
-                            raise Exception(f"接口返回错误代码：{result.get('code')}, 信息：{result.get('message')}")
-                        add_like_record(memory, rpid)
-                        memory = load_memory()
-                        total_liked += 1
-                        print(f"    点赞成功!")
-                    except Exception as e:
-                        print(f"    [错误] 点赞失败: {e}")
+                # 回复评论
+                try:
+                    reply_text = generator.generate_reply(text, user, dyn.get("content", ""))
+                    print(f"    回复: {reply_text}")
 
-                # 概率回复
-                if not is_replied and random.random() < reply_prob:
-                    try:
-                        reply_text = generator.generate_reply(text, user, dyn.get("content", ""))
-                        print(f"    回复: {reply_text}")
+                    result = await reply_to_comment(dyn_oid, int(root_rpid), reply_text, comment_type)
+                    if isinstance(result, dict) and result.get("code", 0) != 0:
+                        raise Exception(f"接口返回错误代码：{result.get('code')}, 信息：{result.get('message')}")
 
-                        result = await reply_to_comment(dyn_oid, int(root_rpid), reply_text, comment_type)
-                        if isinstance(result, dict) and result.get("code", 0) != 0:
-                            raise Exception(f"接口返回错误代码：{result.get('code')}, 信息：{result.get('message')}")
+                    add_reply_record(memory, rpid, reply_text)
+                    memory = load_memory()
 
-                        add_reply_record(memory, rpid, reply_text)
-                        memory = load_memory()
-
-                        print(f"    回复成功!")
-                    except Exception as e:
-                        print(f"    [错误] 回复失败: {e}")
-                elif not is_replied:
-                    print(f"    跳过回复（随机）")
+                    print(f"    回复成功!")
+                except Exception as e:
+                    print(f"    [错误] 回复失败: {e}")
 
         if total_new == 0:
             print("  没有发现新的未处理评论")
         else:
-            print(f"  共发现 {total_new} 条新评论，点赞 {total_liked} 条，处理完毕")
+            print(f"  共发现 {total_new} 条新评论，处理完毕")
 
     except Exception as e:
         print(f"  [错误] 评论检查异常: {e}")
 
 
+async def reply_pending_private_messages(talker_id, uname: str, my_uid: str, context_limit: int = 50) -> int:
+    """
+    处理单个会话的所有待回复私信（生成回复 → 发送 → 标记已处理）。
+    返回成功回复的条数。供定时任务和 GUI 聊天面板复用。
+    """
+    pending = get_unprocessed(talker_id)
+    if not pending:
+        return 0
+
+    print(f"  [{uname}] 有 {len(pending)} 条待回复私信")
+    generator = AIContentGenerator()
+    replied = 0
+
+    for msg in pending:
+        content = msg["content"]
+        image_url = msg.get("image_url") or ""
+        display = "[图片]" if image_url else content[:50]
+        print(f"    [新][{uname}](id:{msg['id']}): {display}")
+
+        try:
+            chat_context = get_chat_context(talker_id, limit=context_limit)
+            reply_text = generator.generate_private_reply(content, uname, chat_context, image_url=image_url or None)
+            print(f"    回复: {reply_text}")
+
+            result = await send_private_msg(int(talker_id), reply_text)
+            if isinstance(result, dict) and result.get("code", 0) != 0:
+                raise Exception(f"接口返回错误代码：{result.get('code')}, 信息：{result.get('message')}")
+
+            add_local_reply(talker_id, my_uid, reply_text)
+            mark_processed(msg["id"])
+            replied += 1
+
+            print(f"    回复成功!")
+        except Exception as e:
+            print(f"    [错误] 回复失败: {e}（下轮自动重试）")
+
+    return replied
+
+
 async def job_check_private_messages():
-    """检查私信并回复"""
+    """检查私信并回复（消息状态存储在 SQLite：chat_history.db）"""
     print(f"[{datetime.now().strftime('%H:%M:%S')}] 开始检查私信...")
     try:
         config = load_config()
         memory = load_memory()
-        reply_prob = config["schedule"].get("private_msg_reply_probability", 1.0)
         my_uid = str(config["bilibili"].get("dedeuserid", ""))
+        context_limit = int(config["schedule"].get("private_msg_context_limit", 50))
+
+        # 旧版 memory.json 私信数据一次性迁移到数据库
+        if migrate_memory_if_needed(memory):
+            print("  [迁移] 已将 memory.json 中的私信记录导入数据库（历史消息不会重复回复）")
 
         sessions = await get_private_sessions()
         if not sessions:
@@ -245,94 +245,34 @@ async def job_check_private_messages():
 
         print(f"  共有 {len(sessions)} 个私信会话")
 
-        generator = AIContentGenerator()
         total_new = 0
 
         for session in sessions:
             talker_id = str(session["talker_id"])
-            uname = session.get("uname", "")
-            max_seqno = session.get("max_seqno", 0)
+            uname = session.get("uname", "") or talker_id
+            max_seqno = int(session.get("max_seqno", 0) or 0)
 
-            update_private_chat_username(memory, talker_id, uname)
+            existing = get_session(talker_id)
 
-            chat_data = get_private_chat(memory, talker_id)
-            last_seqno = chat_data.get("last_seqno", 0)
-
-            if max_seqno <= last_seqno:
-                print(f"  [{uname}] 无新消息")
+            if existing is None:
+                # 首次跟踪该会话：历史消息全部入库并标记已处理，不回复
+                messages = await get_chat_history(int(talker_id), 0)
+                inserted = sync_messages(talker_id, uname, messages, my_uid, historical=True)
+                print(f"  [{uname}] 首次跟踪会话，{inserted} 条历史消息已入库（不回复历史消息）")
                 continue
 
-            print(f"  [{uname}] 有新消息，获取聊天记录...")
-            messages = await get_chat_history(int(talker_id), last_seqno)
+            last_seqno = existing["last_seqno"]
+            if max_seqno > last_seqno:
+                messages = await get_chat_history(int(talker_id), last_seqno)
+                if messages:
+                    sync_messages(talker_id, uname, messages, my_uid, historical=False)
 
-            if not messages:
-                update_chat_last_seqno(memory, talker_id, max_seqno)
-                continue
-
-            # 先把所有获取到的消息同步到memory（关键修复：确保AI有完整上下文）
-            sync_chat_messages_from_api(memory, talker_id, messages, my_uid)
-            memory = load_memory()
-
-            new_messages = []
-            for msg in messages:
-                sender_uid = str(msg.get("sender_uid", 0))
-                if sender_uid == my_uid:
-                    continue
-                msg_key = msg.get("msg_key", 0)
-                if is_private_msg_replied(memory, talker_id, msg_key):
-                    continue
-                new_messages.append(msg)
-
-            if not new_messages:
-                update_chat_last_seqno(memory, talker_id, max_seqno)
-                print(f"  [{uname}] 没有需要回复的新消息")
-                continue
-
-            total_new += len(new_messages)
-            print(f"  [{uname}] 发现 {len(new_messages)} 条新私信")
-
-            for msg in new_messages:
-                msg_key = msg.get("msg_key", 0)
-                text = msg.get("text", "")
-                if not text:
-                    continue
-
-                print(f"    [新][{uname}](msg_key:{msg_key}): {text[:50]}")
-
-                delay = random.randint(3, 15)
-                print(f"    等待 {delay} 秒...")
-                await asyncio.sleep(delay)
-
-                if random.random() < reply_prob:
-                    try:
-                        chat_context = get_chat_context(memory, talker_id, limit=8)
-                        reply_text = generator.generate_private_reply(text, uname, chat_context)
-                        print(f"    回复: {reply_text}")
-
-                        result = await send_private_msg(int(talker_id), reply_text)
-                        if isinstance(result, dict) and result.get("code", 0) != 0:
-                            raise Exception(f"接口返回错误代码：{result.get('code')}, 信息：{result.get('message')}")
-
-                        add_private_reply_record(memory, talker_id, msg_key, reply_text)
-                        memory = load_memory()
-
-                        print(f"    回复成功!")
-                    except Exception as e:
-                        print(f"    [错误] 回复失败: {e}")
-                else:
-                    print(f"    跳过回复（随机）")
-                    # 跳过回复也记录msg_key，避免重复处理同一条消息
-                    chat = get_private_chat(memory, talker_id)
-                    chat.setdefault("replied_msg_keys", []).append(msg_key)
-                    chat["replied_msg_keys"] = chat["replied_msg_keys"][-100:]
-                    save_memory(memory)
-
-            update_chat_last_seqno(memory, talker_id, max_seqno)
+            total_new += await reply_pending_private_messages(talker_id, uname, my_uid, context_limit)
 
         if total_new == 0:
             print("  没有发现新的未回复私信")
         else:
-            print(f"  共发现 {total_new} 条新私信，处理完毕")
+            print(f"  共回复 {total_new} 条新私信，处理完毕")
 
     except Exception as e:
         print(f"  [错误] 私信检查异常: {e}")
@@ -343,6 +283,7 @@ def get_today_stats():
     memory = load_memory()
     today = datetime.now().strftime("%Y-%m-%d")
     stats = get_daily_stats(memory, today)
+    stats["private_replies"] = count_replies_on_date(today)
     return stats
 
 
@@ -355,6 +296,31 @@ def print_stats():
     print(f"{'='*50}")
     print(f"  📝 动态发布: {stats['dynamics']} 条")
     print(f"  💬 评论回复: {stats['replies']} 条")
-    print(f"  👍 评论点赞: {stats['likes']} 条")
     print(f"  💌 私信回复: {stats['private_replies']} 条")
     print(f"{'='*50}\n")
+
+
+def print_private_overview():
+    """打印私信会话总览（数据来自 SQLite）"""
+    overview = get_overview()
+    if not overview:
+        print("\n[私信总览] 暂无任何私信记录")
+        return
+    print(f"\n{'='*60}")
+    print(f"  私信总览（共 {len(overview)} 个会话，按最近活跃排序）")
+    print(f"{'='*60}")
+    for s in overview:
+        uname = s["username"] or s["talker_id"]
+        pending = f"，待回复 {s['pending']} 条" if s["pending"] else ""
+        last = (s["last_content"] or "（无消息）").replace("\n", " ")
+        if len(last) > 30:
+            last = last[:30] + "..."
+        who = "我" if s["last_is_self"] else "对方"
+        ts = s["last_ts"]
+        if ts:
+            tstr = datetime.fromtimestamp(ts).strftime("%m-%d %H:%M")
+        else:
+            tstr = (s["updated_at"] or "")[5:16]
+        print(f"  [{uname}] 共 {s['total']} 条消息{pending}")
+        print(f"      最近: {who}: {last}  ({tstr})")
+    print(f"{'='*60}\n")

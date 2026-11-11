@@ -120,26 +120,6 @@ async def reply_to_comment(dyn_rid: int, root_rpid: int, text: str, comment_type
     return result
 
 
-async def like_comment(rpid: int, dyn_rid: int, comment_type: int = 17, like: bool = True) -> dict:
-    """
-    点赞/取消点赞一条评论
-    rpid: 评论的 rpid
-    dyn_rid: 动态 RID（评论区 oid）
-    comment_type: 评论类型值
-    like: True 点赞，False 取消点赞
-    """
-    credential = get_credential()
-    from bilibili_api.comment import like_comment as api_like_comment
-    result = await api_like_comment(
-        rpid=rpid,
-        oid=dyn_rid,
-        type_=get_comment_resource_type(comment_type),
-        like=like,
-        credential=credential,
-    )
-    return result
-
-
 async def get_private_sessions() -> list:
     """
     获取私信会话列表
@@ -178,7 +158,9 @@ async def get_private_sessions() -> list:
 async def get_chat_history(talker_id: int, begin_seqno: int = 0) -> list:
     """
     获取与指定用户的聊天历史
-    返回: [{"msg_key": int, "msg_seqno": int, "sender_uid": int, "receiver_id": int, "text": str, "timestamp": int, "msg_type": int}, ...]
+    返回: [{"msg_key": int, "msg_seqno": int, "sender_uid": int, "receiver_id": int,
+            "text": str, "image_url": str, "timestamp": int, "msg_type": int}, ...]
+    msg_type: 1=文字, 2=图片（此时 image_url 为图片地址，text 为 "[图片]"）
     """
     credential = get_credential()
     try:
@@ -194,18 +176,27 @@ async def get_chat_history(talker_id: int, begin_seqno: int = 0) -> list:
         for msg in messages:
             content_str = msg.get("content", "")
             text = ""
+            image_url = ""
             msg_type = msg.get("msg_type", 0)
             try:
                 content_obj = json.loads(content_str)
-                text = content_obj.get("content", content_str)
-            except:
-                text = content_str
+            except (json.JSONDecodeError, TypeError):
+                content_obj = {}
+            if msg_type == 2:
+                # 图片消息：content 为 {"url": ..., "width": ..., "height": ...}
+                image_url = content_obj.get("url", "") if isinstance(content_obj, dict) else ""
+                text = "[图片]"
+            elif msg_type == 1:
+                # 文字消息
+                text = content_obj.get("content", content_str) if isinstance(content_obj, dict) else content_str
+            # 其他类型（撤回/表情卡片等）：text 为空，仅用于推进 seqno
             chat_list.append({
                 "msg_key": msg.get("msg_key", 0),
                 "msg_seqno": msg.get("msg_seqno", 0),
                 "sender_uid": msg.get("sender_uid", 0),
                 "receiver_id": msg.get("receiver_id", 0),
                 "text": text,
+                "image_url": image_url,
                 "timestamp": msg.get("timestamp", 0),
                 "msg_type": msg_type,
             })
@@ -230,50 +221,3 @@ async def send_private_msg(receiver_id: int, text: str) -> dict:
         content=text,
     )
     return result
-
-
-async def get_following(uids: list) -> dict:
-    """
-    批量获取用户关注关系
-    uids: 用户UID列表
-    返回: {uid: {"is_following": bool, "is_followed": bool}, ...}
-    """
-    credential = get_credential()
-    from bilibili_api.user import get_relation_infos
-    try:
-        result = await get_relation_infos(credential, uids)
-        return result
-    except Exception as e:
-        print(f"  [警告] 获取关注关系失败: {e}")
-        return {}
-
-
-async def follow_user(uid: int) -> dict:
-    """
-    关注指定用户
-    uid: 要关注的用户UID
-    返回: API 响应
-    """
-    credential = get_credential()
-    from bilibili_api.user import follow
-    try:
-        result = await follow(uid, credential)
-        return result
-    except Exception as e:
-        print(f"  [警告] 关注用户失败 (uid={uid}): {e}")
-        return {}
-
-
-async def get_self_uid() -> int:
-    """
-    获取当前登录账号的UID
-    返回: 用户UID
-    """
-    credential = get_credential()
-    from bilibili_api.user import get_self_info
-    try:
-        info = await get_self_info(credential)
-        return info.get("mid", 0)
-    except Exception as e:
-        print(f"  [警告] 获取自身信息失败: {e}")
-        return 0

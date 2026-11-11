@@ -2,3 +2,7 @@ bilibili-api-python>=16.0.0
 aiohttp>=3.9.0
 openai>=1.0.0
 apscheduler>=3.10.0
+httpx>=0.24.0
+fastapi>=0.110.0
+uvicorn>=0.29.0
+swagger-ui-bundle>=0.0.9

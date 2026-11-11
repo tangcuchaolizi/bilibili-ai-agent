@@ -30,10 +30,26 @@ if not exist "config.json" (
     exit /b 1
 )
 
-echo [INFO] Starting Bilibili AI Agent...
-echo.
-python bot.py
+REM start.bat console → 终端模式；start.bat api → API 服务模式；默认 → GUI 图形界面
+if /i "%~1"=="api" (
+    echo [INFO] Starting API server... 文档: http://127.0.0.1:8100/docs
+    python -m uvicorn api:app --host 127.0.0.1 --port 8100
+    pause
+    exit /b 0
+)
 
-echo.
-echo [INFO] Program exited. Press any key to close...
-pause >nul
+if /i "%~1"=="console" (
+    echo [INFO] Starting in console mode...
+    python bot.py
+    echo.
+    echo [INFO] Program exited. Press any key to close...
+    pause >nul
+    exit /b 0
+)
+
+echo [INFO] Starting GUI... (logs: bot_gui.log)
+if exist "venv\Scripts\pythonw.exe" (
+    start "" venv\Scripts\pythonw.exe bot_gui.py
+) else (
+    start "" pythonw bot_gui.py
+)
