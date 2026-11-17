@@ -13,7 +13,7 @@ def load_config() -> dict:
     config_path = os.path.join(PROJECT_DIR, "config.json")
     if not os.path.exists(config_path):
         raise FileNotFoundError(
-            f"找不到 config.json，请复制 config.example.json 为 config.json 并填入真实信息\n"
+            f"找不到 config.json，请按 README.md「配置说明」中的模板创建该文件并填入真实信息\n"
             f"路径: {config_path}"
         )
     with open(config_path, "r", encoding="utf-8") as f:

@@ -69,7 +69,7 @@ web_search.py → config.json, 必应中国RSS / 博查API (httpx)
 
 **`config_loader.py`** — 基于 JSON 的持久化层。管理 config.json（B站凭证、DeepSeek 凭证、人设、调度配置）和 memory.json（动态历史、已回复评论）。私信聊天数据已迁移至 SQLite（见 chat_store.py），memory.json 中的 private_chats 仅作为迁移前的历史备份保留。
 
-**`test_api.py`** — API 接口测试（40项，TestClient + 全 mock，无需真实网络）。
+**`test_api.py`** — API 接口测试（46项，TestClient + 全 mock，无需真实网络）。
 
 ### 数据流
 
@@ -100,7 +100,7 @@ chat_history.db（SQLite，私信聊天）：
 
 ### 配置：config.json
 
-完整 schema 见 `config.example.json`。主要字段：`bilibili`（SESSDATA、bili_jct、DedeUserID）、`deepseek`（api_key、model、base_url）、`persona`（name、gender、age、city、personality、speaking_style、topics、taboos、fans_name）、`schedule`（post_times、comment_check_interval_minutes、private_msg_check_interval_minutes、private_msg_context_limit）、`web_search`（api_key、enabled、max_per_day、cache_minutes）。
+完整 schema 见 `README.md` 的"配置说明"章节（含 config.json 模板）。主要字段：`bilibili`（SESSDATA、bili_jct、DedeUserID）、`deepseek`（api_key、model、base_url）、`persona`（name、gender、age、city、personality、speaking_style、topics、taboos、fans_name）、`schedule`（post_times、comment_check_interval_minutes、private_msg_check_interval_minutes、private_msg_context_limit）、`web_search`（api_key、enabled、max_per_day、cache_minutes）。
 
 ## 注意事项
 
@@ -111,4 +111,4 @@ chat_history.db（SQLite，私信聊天）：
 - **联网搜索默认免费可用**。默认后端为必应中国 RSS，无需任何密钥即可工作（国内直连）；填写博查 API Key（https://open.bochaai.com）后自动切换到博查后端获得更好的中文搜索质量。私信场景由模型通过 function calling 自主决定何时搜索；动态场景由低成本 LLM 预判调用决定（输出 NO_SEARCH 或搜索词）。搜索过程全程打印 `[搜索]` 日志，失败时优雅降级不影响主流程。
 - **私信图片消息**。msg_type=2 的图片消息提取 image_url 入库（content 存 "[图片]" 占位），回复时走 DeepSeek 视觉理解（多模态消息），视觉调用失败自动降级纯文本，确保图片消息只被回复一次。
 - **无错误恢复**：发布或回复失败时仅记录错误，无重试机制。
-- **测试**：仅有 `test_chat_store.py` 和 `test_web_search.py` 两个测试脚本；`debug_comment.py` 和 `get_rid.py` 是调试工具。
+- **测试**：仅有 `test_api.py` 一个测试脚本（`test_chat_store.py`、`test_web_search.py`、`debug_comment.py`、`get_rid.py` 已删除）。

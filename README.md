@@ -11,8 +11,8 @@
 
 - **随开随用**：启动时可以选择"立刻发一条"或"只开后台定时"
 - **笔记本友好**：运行时内存仅 50-80 MB，完全不吃性能
-- **零配置一键启动**：双击 `启动智能体.bat` 自动安装依赖、检查配置
-- **记事本式管理**：所有记忆存储在 JSON 文件中
+- **零配置一键启动**：双击 `start.bat` 自动安装依赖、检查配置
+- **本地存储**：动态/评论记忆存在 JSON 文件，私信聊天存在 SQLite 数据库
 
 ---
 
@@ -32,14 +32,13 @@ bilibili-ai-agent/
 ├── chat_store.py         # 私信聊天存储（SQLite）
 ├── web_search.py         # 联网搜索（必应RSS免费/博查可选）
 ├── config_loader.py      # 配置和记忆管理
-├── config.example.json   # 配置文件模板
-├── config.json           # 你的配置文件（需手动创建）
-├── memory.json           # 记忆存储（自动生成）
+├── config.json           # 你的配置文件（需手动创建，模板见下方"配置说明"）
+├── memory.json           # 动态/评论记忆（自动生成）
 ├── chat_history.db       # 私信聊天数据库（自动生成）
-├── test_chat_store.py    # 存储层测试脚本
-├── test_web_search.py    # 联网搜索+图片回复测试脚本
 ├── test_api.py           # API 接口测试脚本
 ├── requirements.txt      # Python 依赖
+├── Dockerfile            # Docker 镜像构建（可选）
+├── docker-compose.yml    # Docker 一键运行（可选）
 └── venv/                 # 虚拟环境（自动创建）
 ```
 
@@ -49,7 +48,7 @@ bilibili-ai-agent/
 
 ### 方式一：双击启动（推荐新手）
 
-1. 复制 `config.example.json` 为 `config.json`，填入你的信息（见下方配置说明）
+1. 在项目目录新建 `config.json`，按下方"配置说明"填入你的信息
 2. **双击 `start.bat`** —— 默认打开图形界面（GUI）
 3. 第一次会自动创建虚拟环境并安装依赖
 4. 之后每次双击即可运行
@@ -111,16 +110,53 @@ uvicorn api:app --host 127.0.0.1 --port 8100
 | 调度器 | POST | /api/scheduler/start | 启动后台定时 |
 | 调度器 | POST | /api/scheduler/stop | 停止后台定时 |
 
-接口测试：`python -B test_api.py`（40项，全部 mock 无需真实网络）
+接口测试：`python -B test_api.py`（46项，全部 mock 无需真实网络）
 
 ---
 
 ## 配置说明
 
-### 第一步：复制配置模板
+### 第一步：创建 config.json
 
-```bash
-cp config.example.json config.json
+在项目目录新建 `config.json` 文件，粘贴以下模板并填入你的真实信息：
+
+```json
+{
+  "bilibili": {
+    "sessdata": "填入你的SESSDATA",
+    "bili_jct": "填入你的bili_jct",
+    "dedeuserid": "填入你的DedeUserID"
+  },
+  "deepseek": {
+    "api_key": "填入你的DeepSeek密钥",
+    "model": "deepseek-flash",
+    "base_url": "https://api.deepseek.com"
+  },
+  "persona": {
+    "name": "小栗猫",
+    "gender": "女",
+    "age": "500岁的猫娘",
+    "city": "二相乐园的海原市",
+    "personality": "温柔可爱，偶尔傲娇",
+    "speaking_style": "口语化，爱用'嘛''呢''呀'等语气词",
+    "topics": ["日常生活", "美食", "追番追剧", "游戏日常", "天气"],
+    "taboos": ["政治敏感话题", "色情暴力", "广告营销", "引流内容"],
+    "fans_name": ""
+  },
+  "schedule": {
+    "post_times": ["08:30", "12:15", "18:45", "22:00"],
+    "post_count_per_round": "1-2",
+    "comment_check_interval_minutes": 15,
+    "private_msg_check_interval_minutes": 5,
+    "private_msg_context_limit": 50
+  },
+  "web_search": {
+    "api_key": "",
+    "enabled": true,
+    "max_per_day": 30,
+    "cache_minutes": 60
+  }
+}
 ```
 
 ### 第二步：获取 B站 Cookie
@@ -152,7 +188,8 @@ cp config.example.json config.json
 
 ## 使用方式
 
-启动后会有交互菜单：
+默认双击 `start.bat` 打开图形界面（GUI），见上方"快速开始"。
+如果选择终端模式（`start.bat console` 或 `python bot.py`），启动后会有交互菜单：
 
 ```
 [交互] 请选择操作：
@@ -193,12 +230,13 @@ cp config.example.json config.json
 
 | 参数 | 说明 | 默认值 |
 |------|------|--------|
-| `api_key` | 博查AI搜索 API 密钥，留空则禁用联网搜索 | `""` |
-| `enabled` | 是否启用 | `true` |
-| `max_per_day` | 每日搜索次数上限（防止费用失控） | 20 |
+| `api_key` | 博查AI搜索 API 密钥，**留空也能用**（默认走免费的必应中国RSS），填入后切换到博查（中文质量更好） | `""` |
+| `enabled` | 是否启用联网搜索 | `true` |
+| `max_per_day` | 每日搜索次数上限（防止失控） | 30 |
 | `cache_minutes` | 相同查询的结果缓存时长（分钟），缓存命中不消耗次数 | 60 |
 
-获取密钥：访问 [open.bochaai.com](https://open.bochaai.com) 注册 → 创建 API Key → 填入 config.json，无需改代码。搜索失败时自动降级，不影响正常回复和发布。
+**不填密钥即可使用**：默认后端是必应中国 RSS 接口，免费、无需注册、国内直连。
+想要更好的中文搜索质量时：访问 [open.bochaai.com](https://open.bochaai.com) 注册 → 创建 API Key → 填入 config.json，无需改代码。搜索失败时自动降级，不影响正常回复和发布。
 
 ### 记忆系统
 
@@ -211,8 +249,6 @@ cp config.example.json config.json
 - 消息永久保存，无条数上限，上下文记忆更长
 - 通过消息状态标记区分已处理/待处理，不会重复回复历史消息
 - 旧版 memory.json 中的私信记录会在首次运行时自动迁移入库
-
-运行测试：`python -B test_chat_store.py`（存储层）、`python -B test_web_search.py`（联网搜索链路，无需密钥）
 
 ---
 
